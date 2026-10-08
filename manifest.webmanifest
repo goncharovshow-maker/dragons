@@ -1,0 +1,16 @@
+{
+  "name": "Шанхай Дрэгонс — Командный центр",
+  "short_name": "Шанхай Дрэгонс",
+  "description": "Командный центр хоккейного клуба «Шанхай Дрэгонс»: арена, секторы, расписание, календарь.",
+  "lang": "ru",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#03203a",
+  "theme_color": "#03203a",
+  "icons": [
+    { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

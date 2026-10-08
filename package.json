@@ -1,0 +1,9 @@
+{
+  "name": "shanghai-dragons-command-center",
+  "private": true,
+  "description": "Статическое браузерное приложение. Зависимостей нет; package.json нужен только для запуска автотестов.",
+  "scripts": {
+    "test": "TZ=Europe/Moscow node --test tests/",
+    "club": "node tools/club.js"
+  }
+}

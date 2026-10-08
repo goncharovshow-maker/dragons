@@ -1,0 +1,37 @@
+// Ядро: данные сезона, загрузка и проверка состояния, прогресс миссий, общие функции. Без обращений к DOM при загрузке (нужен для автотестов).
+// Файл входит в разбиение бывшего app.js; порядок подключения — в index.html.
+const { SEASONS, sectors, matches: initialMatches } = window.ClubData;
+const STORE = CLUB.storageKey;
+const statuses = ["не начато", "в работе", "выполнено"];
+let activeSector = "sport"; let currentSeason = SEASONS[0]; let state = null; // state = loadState() выполняется в main.js после загрузки всех файлов
+function blankSeason(){return {sectors:Object.fromEntries(sectors.map(s=>[s.id,Object.fromEntries(s.missions.map((_,i)=>[String(i),[]]))])),customMissions:Object.fromEntries(sectors.map(s=>[s.id,[]])),matches:initialMatches.map(m=>({...m})),history:null};}
+// Хранилище данных клуба. Сейчас — только локальное (localStorage этого браузера); серверный исполнитель с тем же интерфейсом добавится позже (docs/server-plan.md).
+const LocalStore={read(){return JSON.parse(localStorage.getItem(STORE));},write(s){localStorage.setItem(STORE,JSON.stringify(s));}};
+const DataStore=LocalStore;
+function loadState(){try{return normalizeState(DataStore.read());}catch{return normalizeState(null);}}
+function cleanId(v){return String(v||"").replace(/[^\w-]/g,"")||newId();}
+function strList(v){return Array.isArray(v)?v.map(String):[];}
+function cleanList(list){return (Array.isArray(list)?list:[]).filter(x=>x&&typeof x==="object"&&typeof x.name==="string"&&x.name.trim()).map(x=>({...x,id:cleanId(x.id)}));}
+function normalizeState(saved){const result=saved?.seasons&&typeof saved.seasons==="object"&&!Array.isArray(saved.seasons)?saved:{seasons:{}};result.players=cleanList(result.players);result.trainers=cleanList(result.trainers).map(t=>({...t,teams:strList(t.teams),photo:/^assets\/[\w./-]+\.(?:png|jpe?g|webp)$/.test(t.photo||"")?t.photo:""}));const pids=new Set(result.players.map(p=>p.id)),tids=new Set(result.trainers.map(t=>t.id));result.parents=cleanList(result.parents).map(x=>({...x,children:strList(x.children).filter(c=>pids.has(c))}));result.sessions=(Array.isArray(result.sessions)?result.sessions:[]).filter(x=>x&&typeof x==="object"&&/^\d{1,2}:\d{2}$/.test(x.start)&&/^\d{1,2}:\d{2}$/.test(x.end)).map(x=>({...x,id:cleanId(x.id),day:Math.min(7,Math.max(1,Math.round(+x.day)||1)),teams:strList(x.teams),trainerId:tids.has(x.trainerId)?x.trainerId:""}));const sids=new Set(result.sessions.map(x=>x.id)),rawAtt=result.attendance,rawPay=result.payments;result.attendance={};result.payments={};if(rawAtt&&typeof rawAtt==="object"&&!Array.isArray(rawAtt))for(const [k,v] of Object.entries(rawAtt)){const m=/^(\d{4}-\d{2}-\d{2})\|([\w-]+)$/.exec(k);if(!m||!sids.has(m[2])||!v||typeof v!=="object")continue;const rec={};for(const [pid,val] of Object.entries(v))if(pids.has(pid)&&typeof val==="boolean")rec[pid]=val;if(Object.keys(rec).length)result.attendance[k]=rec;}const rawEx=result.exceptions,rawEv=result.events,dre=/^\d{4}-\d{2}-\d{2}$/,tre=/^\d{1,2}:\d{2}$/;result.exceptions=(Array.isArray(rawEx)?rawEx:[]).filter(e=>e&&typeof e==="object"&&sids.has(e.sessionId)&&dre.test(e.date)&&(e.type==="cancel"||(e.type==="move"&&dre.test(e.newDate)&&(!e.newStart||tre.test(e.newStart))&&(!e.newEnd||tre.test(e.newEnd))))).map(e=>({id:cleanId(e.id),sessionId:e.sessionId,date:e.date,type:e.type,newDate:e.newDate||"",newStart:e.newStart||"",newEnd:e.newEnd||"",note:String(e.note||"")}));result.events=(Array.isArray(rawEv)?rawEv:[]).filter(e=>e&&typeof e==="object"&&typeof e.title==="string"&&e.title.trim()&&dre.test(e.from)&&dre.test(e.to)).map(e=>({id:cleanId(e.id),kind:CAL_KINDS.includes(e.kind)?e.kind:"событие",title:e.title,from:e.from<=e.to?e.from:e.to,to:e.from<=e.to?e.to:e.from,teams:strList(e.teams),cancels:!!e.cancels,note:String(e.note||"")}));if(rawPay&&typeof rawPay==="object"&&!Array.isArray(rawPay))for(const [mo,v] of Object.entries(rawPay)){if(!/^\d{4}-\d{2}$/.test(mo)||!v||typeof v!=="object")continue;const rec={};for(const pid of Object.keys(v))if(pids.has(pid)&&v[pid]===true)rec[pid]=true;result.payments[mo]=rec;}SEASONS.forEach(s=>{const d=result.seasons[s]&&typeof result.seasons[s]==="object"?result.seasons[s]:(result.seasons[s]=blankSeason());d.sectors||={};d.customMissions||=Object.fromEntries(sectors.map(x=>[x.id,[]]));d.matches||=initialMatches.map(m=>({...m}));normalizeCompetitions(d);normalizeMedia(d);normalizeFunnel(d,pids);normalizeAssess(d,pids);normalizePartners(d);normalizeProgram(d);});return result;}
+function season(){return state.seasons[currentSeason]||=(blankSeason());} function save(){DataStore.write(state);markUnsaved();}
+function missionsFor(s){return [...s.missions,...(season().customMissions[s.id]||=([]))];} function tasksFor(id,i){const d=season();d.sectors[id]||={};return d.sectors[id][String(i)]||=[];}
+function missionProgress(s,i){const tasks=tasksFor(s.id,i);return tasks.length?Math.round(tasks.filter(t=>t.status==="выполнено").length/tasks.length*100):0;} function sectorProgress(s){if(s.id==="education"){const pp=programPercent();if(pp!==null)return pp;}const ms=missionsFor(s);return ms.length?Math.round(ms.reduce((n,_,i)=>n+missionProgress(s,i),0)/ms.length):0;}
+function metrics(){const tasks=sectors.flatMap(s=>missionsFor(s).flatMap((_,i)=>tasksFor(s.id,i)));const active=sectors.filter(s=>missionsFor(s).length);const done=tasks.filter(t=>t.status==="выполнено").length;return {done,total:tasks.length,inWork:tasks.filter(t=>t.status==="в работе").length,missionTotal:sectors.reduce((n,s)=>n+missionsFor(s).length,0),completion:tasks.length?Math.round(done/tasks.length*100):0,development:active.length?Math.round(active.reduce((n,s)=>n+sectorProgress(s),0)/active.length):0};}
+function esc(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");} function date(v){return v?new Date(v+"T00:00").toLocaleDateString("ru-RU"):"Не указана";} function cap(v){return v[0].toUpperCase()+v.slice(1);}
+function attr(v){return esc(v||"").replace(/"/g,"&quot;");}
+function plural(n, one, few, many) { const a = n % 100, b = n % 10; return a > 10 && a < 15 ? many : b === 1 ? one : b > 1 && b < 5 ? few : many; }
+
+// ===== Резервная копия: экспорт / импорт JSON =====
+function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+// ===== Напоминание о резервной копии =====
+const BACKUP_REMINDER_DAYS = 7, K_UNSAVED = STORE + "-unsaved-since", K_BACKUP = STORE + "-last-backup", K_SNOOZE = STORE + "-remind-after";
+function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function lsSet(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
+function markUnsaved() { if (!lsGet(K_UNSAVED)) lsSet(K_UNSAVED, String(Date.now())); }
+function markBackedUp() { lsSet(K_BACKUP, String(Date.now())); lsSet(K_UNSAVED, null); lsSet(K_SNOOZE, null); }
+function daysAgo(ts) { return Math.floor((Date.now() - +ts) / 864e5); }
+function backupInfo() { const b = lsGet(K_BACKUP); return b ? "Последняя копия: " + new Date(+b).toLocaleDateString("ru-RU") + " (" + (daysAgo(b) ? daysAgo(b) + " дн. назад" : "сегодня") + ")" : "Копия ещё не создавалась."; }
+function dateStr(d) { return d.toLocaleDateString("sv-SE"); }
+function weekdayOf(s) { return new Date(s + "T00:00").getDay() || 7; }
+function lastOccurrence(day) { const d = new Date(); d.setDate(d.getDate() - (((d.getDay() || 7) - day + 7) % 7)); return dateStr(d); }
